@@ -1,6 +1,28 @@
 plugins {
     id 'base'
     id 'cpp'
+    id 'maven-publish'
+
+    id 'org.ajoberstar.grgit' version '1.7.2'
+    id 'org.ajoberstar.release-base' version '1.7.2'
+    id 'org.ajoberstar.release-opinion' version '1.7.2'
+}
+
+println "nexus repo is: ${project.'nexus.repo'}"
+
+import org.gradle.internal.os.OperatingSystem
+
+ext {
+    getCurOS = {
+        return OperatingSystem.current().isWindows() ? 'windows' : 'linux'
+    }
+    curOS = getCurOS()
+}
+
+def getOSArtifactName(name) {
+    def osPref = OperatingSystem.current().isWindows() ? '' : 'lib'
+    def osSuf = OperatingSystem.current().isWindows() ? 'windows' : 'linux'
+    return "${osPref}${name}-${osSuf}"
 }
 
 model {
@@ -34,8 +56,11 @@ model {
             }
             if (toolChain in Gcc) {
                 println 'toolchain is Gcc!'
+                // TODO: use an optimized release flags here
                 cppCompiler.args '-std=c++0x', '-O0', '-g', '-fno-omit-frame-pointer'
                 linker.args '-g'
+                //cppCompiler.args '-std=c++0x', '-O0', '-g', '-fno-omit-frame-pointer'
+                //linker.args '-g'
             }
             if (toolChain in Clang) {
                 println 'toolchain is Clang!'
@@ -46,6 +71,17 @@ model {
     }
 
     components {
+ 	clbhfst(NativeLibrarySpec) {
+            targetPlatform 'x64'
+            sources {
+                cpp {
+                    source {
+                        srcDirs 'src/main/cpp'
+                        include '*.cc'
+                    }
+                }
+            }
+        }
  	main(NativeExecutableSpec) {
             targetPlatform 'x64'
             sources {
@@ -53,10 +89,60 @@ model {
                     source {
                         srcDirs 'src/main/cpp'
                         include '*.cpp'
-                        include '*.cc'
                     }
+                    lib library: "clbhfst", linkage: 'static'
                 }
+            }
+        }
+        all {
+            binaries.withType(SharedLibraryBinarySpec) {
+                buildable = false
+            }
+            binaries.withType(StaticLibraryBinarySpec) {
+                // println it.properties it.tasks
+                //println it.component.baseName + ' -> ' + it.staticLibraryFile
+                project.repositories.modulestatic.dir(it.staticLibraryFile.parentFile) // println '-> ' + project.repositories.modulestatic.dirs
+                project.publishing.publications.clbhfst.artifact([source: it.staticLibraryFile]) // , extension: 'dll'
+                //println '-> ' + project.publishing.publications.clbhfst.properties
+                //println '-> ' + project.properties
             }
         }
     }
 }
+
+repositories {
+    flatDir {
+        name "modulestatic"
+    }
+}
+
+publishing {
+    publications {
+        clbhfst(MavenPublication) {
+            groupId 'clarabridge'
+            artifactId getOSArtifactName(name) // project.publishing.publications.cld2.name, by default - projectName
+            //version version // project.version, semver
+        }
+    }
+    repositories {
+        maven {
+            // change to point to your repo, e.g. http://my.org/repo
+            url project.'nexus.repo' //"$buildDir/repo"
+            credentials {
+                username = project.'nexus.deploy.user'
+                password = project.'nexus.deploy.password'
+            }
+        }
+    }
+}
+
+task dumpVersion() {
+    doLast {
+        println "dump version is: ${project.version}"
+    }
+}
+
+publish.dependsOn build, dumpVersion
+
+// To make a 1.0.0 release, execute the following:
+// $ gradle release -Prelease.stage=final -Prelease.scope=major
